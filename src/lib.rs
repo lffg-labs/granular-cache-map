@@ -75,10 +75,8 @@ where
         info!("acquiring write lock...");
         let mut guard = self.key(key).write().unwrap();
         if guard.is_none() || S::conflict_pred(key, guard.as_ref().unwrap()) {
-            info!("storing new `load result`...");
             self.load(key, &mut guard)?;
         }
-        info!("done");
         Ok(WriteRef(guard))
     }
 
