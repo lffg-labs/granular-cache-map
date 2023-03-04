@@ -93,7 +93,7 @@ where
         Ok(WriteRef(guard))
     }
 
-    /// Loads the given page.
+    /// Loads the entry for the given key.
     fn load(&self, key: &S::Key, opt: &mut Option<S::Val>) -> Result<(), S::Err> {
         info!("storing new `load result`...");
         opt.replace({
