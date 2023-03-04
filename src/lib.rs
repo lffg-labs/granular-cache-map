@@ -55,10 +55,10 @@ where
     /// Acquires the value by the given key, for read.
     pub fn read(&self, key: &S::Key) -> Result<ReadRef<'_, S::Val>, S::Err> {
         info!("acquiring read lock...");
-        let lock = self.key(key).read().unwrap();
+        let guard = self.key(key).read().unwrap();
 
-        if lock.is_none() || S::conflict_pred(key, lock.as_ref().unwrap()) {
-            drop(lock);
+        if guard.is_none() || S::conflict_pred(key, guard.as_ref().unwrap()) {
+            drop(guard);
 
             self.load(key, &mut self.key(key).write().unwrap())?;
 
@@ -66,7 +66,7 @@ where
             let lock = self.key(key).read().unwrap();
             Ok(ReadRef(lock))
         } else {
-            Ok(ReadRef(lock))
+            Ok(ReadRef(guard))
         }
     }
 
