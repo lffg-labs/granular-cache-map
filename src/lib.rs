@@ -67,6 +67,7 @@ where
         info!("acquiring read lock...");
         let mut guard = self.key(key).read().unwrap();
 
+        // FIXME: This may deadlock in case of conflict, which MUST NOT happen.
         if guard.is_none() || S::match_kv(key, guard.as_ref().unwrap()) {
             // One needs to unlock (i.e., drop) the read guard to acquire the
             // write guard to perform the load. Otherwise, it'd deadlock.
@@ -85,6 +86,7 @@ where
     pub fn write(&self, key: &S::Key) -> Result<WriteRef<'_, S::Val>, S::Err> {
         info!("acquiring write lock...");
         let mut guard = self.key(key).write().unwrap();
+        // FIXME: This may deadlock in case of conflict, which MUST NOT happen.
         if guard.is_none() || S::match_kv(key, guard.as_ref().unwrap()) {
             self.load(key, &mut guard)?;
         }
@@ -150,7 +152,7 @@ impl<V> DerefMut for WriteRef<'_, V> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicU32, Ordering};
+    use crate::test_utils::{TestHashBuilder, TestStrategy};
 
     use super::*;
 
@@ -160,9 +162,9 @@ mod tests {
         let c = Cache::<TestStrategy, TestHashBuilder>::new::<4>(s);
 
         let s1 = c.read(&1).unwrap();
-        assert_eq!(c.clone_strategy().count.load(Ordering::SeqCst), 1);
+        assert_eq!(c.clone_strategy().count(), 1);
         let s2 = c.read(&1).unwrap();
-        assert_eq!(c.clone_strategy().count.load(Ordering::SeqCst), 1);
+        assert_eq!(c.clone_strategy().count(), 1);
 
         assert_eq!(&*s1, &*s2);
     }
@@ -174,17 +176,17 @@ mod tests {
 
         {
             let data = c.read(&1).unwrap();
-            assert_eq!(c.clone_strategy().count.load(Ordering::SeqCst), 1);
+            assert_eq!(c.clone_strategy().count(), 1);
             assert_eq!(&*data, "1one");
         }
         {
             let mut data = c.write(&1).unwrap();
-            assert_eq!(c.clone_strategy().count.load(Ordering::SeqCst), 1);
+            assert_eq!(c.clone_strategy().count(), 1);
             data.push_str("-mod");
         }
         {
             let data = c.read(&1).unwrap();
-            assert_eq!(c.clone_strategy().count.load(Ordering::SeqCst), 1);
+            assert_eq!(c.clone_strategy().count(), 1);
             assert_eq!(&*data, "1one-mod");
         }
     }
@@ -195,9 +197,9 @@ mod tests {
         let c = Cache::<TestStrategy, TestHashBuilder>::new::<4>(s);
 
         let s1 = c.write(&1).unwrap();
-        assert_eq!(c.clone_strategy().count.load(Ordering::SeqCst), 1);
+        assert_eq!(c.clone_strategy().count(), 1);
         let s2 = c.write(&2).unwrap();
-        assert_eq!(c.clone_strategy().count.load(Ordering::SeqCst), 2);
+        assert_eq!(c.clone_strategy().count(), 2);
 
         assert_ne!(&*s1, &*s2);
     }
@@ -209,32 +211,45 @@ mod tests {
 
         {
             let s1 = c.read(&1).unwrap();
-            assert_eq!(c.clone_strategy().count.load(Ordering::SeqCst), 1);
+            assert_eq!(c.clone_strategy().count(), 1);
             assert_eq!(&*s1, "1one");
         }
         {
             // won't change here
             let s1 = c.read(&1).unwrap();
-            assert_eq!(c.clone_strategy().count.load(Ordering::SeqCst), 1);
+            assert_eq!(c.clone_strategy().count(), 1);
             assert_eq!(&*s1, "1one");
         }
         {
             // will change here since `5 % 4 = 1`
             let s2 = c.read(&5).unwrap();
-            assert_eq!(c.clone_strategy().count.load(Ordering::SeqCst), 2);
+            assert_eq!(c.clone_strategy().count(), 2);
             assert_eq!(&*s2, "5five");
         }
         {
             // hence, third load
             let s1 = c.read(&1).unwrap();
-            assert_eq!(c.clone_strategy().count.load(Ordering::SeqCst), 3);
+            assert_eq!(c.clone_strategy().count(), 3);
             assert_eq!(&*s1, "1one");
         }
     }
+}
+
+#[cfg(test)]
+pub(crate) mod test_utils {
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    use super::*;
 
     #[derive(Default)]
-    struct TestStrategy {
+    pub struct TestStrategy {
         count: AtomicU32,
+    }
+
+    impl TestStrategy {
+        pub fn count(&self) -> u32 {
+            self.count.load(Ordering::SeqCst)
+        }
     }
 
     impl Clone for TestStrategy {
@@ -269,7 +284,7 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct TestHashBuilder;
+    pub struct TestHashBuilder;
 
     impl BuildHasher for TestHashBuilder {
         type Hasher = TestHasher;
@@ -279,7 +294,7 @@ mod tests {
         }
     }
 
-    struct TestHasher(u64);
+    pub struct TestHasher(u64);
 
     impl Hasher for TestHasher {
         fn finish(&self) -> u64 {
