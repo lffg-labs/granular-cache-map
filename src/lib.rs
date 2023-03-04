@@ -136,6 +136,84 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn test_multiple_readers_same_key() {
+        let s = TestStrategy::default();
+        let c = Cache::<TestStrategy, TestHashBuilder>::new::<4>(s);
+
+        let s1 = c.read(&1).unwrap();
+        assert_eq!(c.clone_strategy().count.load(Ordering::SeqCst), 1);
+        let s2 = c.read(&1).unwrap();
+        assert_eq!(c.clone_strategy().count.load(Ordering::SeqCst), 1);
+
+        assert_eq!(&*s1, &*s2);
+    }
+
+    #[test]
+    fn test_read_and_write_same_key() {
+        let s = TestStrategy::default();
+        let c = Cache::<TestStrategy, TestHashBuilder>::new::<4>(s);
+
+        {
+            let data = c.read(&1).unwrap();
+            assert_eq!(c.clone_strategy().count.load(Ordering::SeqCst), 1);
+            assert_eq!(&*data, "1one");
+        }
+        {
+            let mut data = c.write(&1).unwrap();
+            assert_eq!(c.clone_strategy().count.load(Ordering::SeqCst), 1);
+            data.push_str("-mod");
+        }
+        {
+            let data = c.read(&1).unwrap();
+            assert_eq!(c.clone_strategy().count.load(Ordering::SeqCst), 1);
+            assert_eq!(&*data, "1one-mod");
+        }
+    }
+
+    #[test]
+    fn test_read_diff_keys() {
+        let s = TestStrategy::default();
+        let c = Cache::<TestStrategy, TestHashBuilder>::new::<4>(s);
+
+        let s1 = c.write(&1).unwrap();
+        assert_eq!(c.clone_strategy().count.load(Ordering::SeqCst), 1);
+        let s2 = c.write(&2).unwrap();
+        assert_eq!(c.clone_strategy().count.load(Ordering::SeqCst), 2);
+
+        assert_ne!(&*s1, &*s2);
+    }
+
+    #[test]
+    fn test_collision() {
+        let s = TestStrategy::default();
+        let c = Cache::<TestStrategy, TestHashBuilder>::new::<4>(s);
+
+        {
+            let s1 = c.read(&1).unwrap();
+            assert_eq!(c.clone_strategy().count.load(Ordering::SeqCst), 1);
+            assert_eq!(&*s1, "1one");
+        }
+        {
+            // won't change here
+            let s1 = c.read(&1).unwrap();
+            assert_eq!(c.clone_strategy().count.load(Ordering::SeqCst), 1);
+            assert_eq!(&*s1, "1one");
+        }
+        {
+            // will change here since `5 % 4 = 1`
+            let s2 = c.read(&5).unwrap();
+            assert_eq!(c.clone_strategy().count.load(Ordering::SeqCst), 2);
+            assert_eq!(&*s2, "5five");
+        }
+        {
+            // hence, third load
+            let s1 = c.read(&1).unwrap();
+            assert_eq!(c.clone_strategy().count.load(Ordering::SeqCst), 3);
+            assert_eq!(&*s1, "1one");
+        }
+    }
+
     #[derive(Default)]
     struct TestStrategy {
         count: AtomicU32,
@@ -172,40 +250,29 @@ mod tests {
         }
     }
 
-    // TODO: Test with different keys.
-    //       Due to the possibility of hash conflict, the test suite should use
-    //       a stable `BuildHasher` implementation to avoid flaky tests.
+    #[derive(Default)]
+    struct TestHashBuilder;
 
-    #[test]
-    fn test_multiple_readers_same_key() {
-        let s = TestStrategy::default();
-        let c = Cache::<TestStrategy>::new::<4>(s);
+    impl BuildHasher for TestHashBuilder {
+        type Hasher = TestHasher;
 
-        let s1 = &*c.read(&1).unwrap();
-        assert_eq!(c.clone_strategy().count.load(Ordering::SeqCst), 1);
-        let s2 = &*c.read(&1).unwrap();
-        assert_eq!(c.clone_strategy().count.load(Ordering::SeqCst), 1);
-
-        assert_eq!(s1, s2);
+        fn build_hasher(&self) -> Self::Hasher {
+            TestHasher(0)
+        }
     }
 
-    #[test]
-    fn test_read_and_write_same_key() {
-        let s = TestStrategy::default();
-        let c = Cache::<TestStrategy>::new::<4>(s);
+    struct TestHasher(u64);
 
-        let s1 = c.read(&1).unwrap();
-        assert_eq!(c.clone_strategy().count.load(Ordering::SeqCst), 1);
-        assert_eq!(&*s1, "1one");
-        drop(s1);
+    impl Hasher for TestHasher {
+        fn finish(&self) -> u64 {
+            self.0
+        }
 
-        let mut s2 = c.write(&1).unwrap();
-        assert_eq!(c.clone_strategy().count.load(Ordering::SeqCst), 1);
-        s2.push_str("-mod");
-        drop(s2);
-
-        let s1 = c.read(&1).unwrap();
-        assert_eq!(c.clone_strategy().count.load(Ordering::SeqCst), 1);
-        assert_eq!(&*s1, "1one-mod");
+        fn write(&mut self, bytes: &[u8]) {
+            let mut arr = [0_u8; 8];
+            arr[..4].copy_from_slice(bytes);
+            let orig = u64::from_ne_bytes(arr);
+            self.0 = orig;
+        }
     }
 }
