@@ -7,6 +7,10 @@ use std::{
 
 use tracing::info;
 
+use crate::write_batch::WriteBatch;
+
+mod write_batch;
+
 /// A cache strategy implementations. Provides information about the cache's key
 /// and value types. It also provides a mechanism to load new values to the
 /// cache.
@@ -27,7 +31,6 @@ pub trait CacheStrategy {
 pub struct Cache<S, H = RandomState>
 where
     S: CacheStrategy,
-    H: BuildHasher + Default,
 {
     entries: Box<[RwLock<Option<S::Val>>]>,
     strategy: Mutex<S>,
@@ -96,6 +99,11 @@ where
             load_guard.load(key)?
         });
         Ok(())
+    }
+
+    /// Batch edit.
+    pub fn write_batch(&self) -> WriteBatch<'_, S, H> {
+        WriteBatch::new(self)
     }
 
     /// Returns a copy of the current strategy.
