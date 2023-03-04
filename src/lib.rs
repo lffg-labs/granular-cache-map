@@ -7,16 +7,23 @@ use std::{
 
 use tracing::info;
 
+/// A cache strategy implementations. Provides information about the cache's key
+/// and value types. It also provides a mechanism to load new values to the
+/// cache.
 pub trait CacheStrategy {
     type Key;
     type Val;
     type Err;
 
+    /// Loads the value for the given key.
     fn load(&mut self, key: &Self::Key) -> Result<Self::Val, Self::Err>;
 
-    fn conflict_pred(key: &Self::Key, val: &Self::Val) -> bool;
+    /// Checks if the given key corresponds to the given value. If not (i.e,
+    /// `false` returned), one assumes a cache key conflict.
+    fn match_kv(key: &Self::Key, val: &Self::Val) -> bool;
 }
 
+/// The cache over a given [`CacheStrategy`].
 pub struct Cache<S, H = RandomState>
 where
     S: CacheStrategy,
@@ -55,26 +62,27 @@ where
     /// Acquires the value by the given key, for read.
     pub fn read(&self, key: &S::Key) -> Result<ReadRef<'_, S::Val>, S::Err> {
         info!("acquiring read lock...");
-        let guard = self.key(key).read().unwrap();
+        let mut guard = self.key(key).read().unwrap();
 
-        if guard.is_none() || S::conflict_pred(key, guard.as_ref().unwrap()) {
+        if guard.is_none() || S::match_kv(key, guard.as_ref().unwrap()) {
+            // One needs to unlock (i.e., drop) the read guard to acquire the
+            // write guard to perform the load. Otherwise, it'd deadlock.
             drop(guard);
 
             self.load(key, &mut self.key(key).write().unwrap())?;
 
             info!("acquiring new read lock to return...");
-            let lock = self.key(key).read().unwrap();
-            Ok(ReadRef(lock))
-        } else {
-            Ok(ReadRef(guard))
+            guard = self.key(key).read().unwrap();
         }
+
+        Ok(ReadRef(guard))
     }
 
     /// Acquires the value by the given key, for write.
     pub fn write(&self, key: &S::Key) -> Result<WriteRef<'_, S::Val>, S::Err> {
         info!("acquiring write lock...");
         let mut guard = self.key(key).write().unwrap();
-        if guard.is_none() || S::conflict_pred(key, guard.as_ref().unwrap()) {
+        if guard.is_none() || S::match_kv(key, guard.as_ref().unwrap()) {
             self.load(key, &mut guard)?;
         }
         Ok(WriteRef(guard))
@@ -104,6 +112,7 @@ where
     }
 }
 
+/// A read-only shared view over a cache entry's value.
 pub struct ReadRef<'a, V>(RwLockReadGuard<'a, Option<V>>);
 
 impl<V> Deref for ReadRef<'_, V> {
@@ -114,6 +123,7 @@ impl<V> Deref for ReadRef<'_, V> {
     }
 }
 
+/// a write exclusive view over a cache entry's value.
 pub struct WriteRef<'a, V>(RwLockWriteGuard<'a, Option<V>>);
 
 impl<V> Deref for WriteRef<'_, V> {
@@ -245,7 +255,7 @@ mod tests {
             .into())
         }
 
-        fn conflict_pred(key: &Self::Key, val: &Self::Val) -> bool {
+        fn match_kv(key: &Self::Key, val: &Self::Val) -> bool {
             !val.starts_with(&key.to_string())
         }
     }
